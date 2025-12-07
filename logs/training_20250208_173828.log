@@ -1,0 +1,32 @@
+2025-02-08 17:38:28,295 - INFO - Logging configured. Log file: logs\training_20250208_173828.log
+2025-02-08 17:38:28,295 - INFO - Starting model pipeline...
+2025-02-08 17:38:28,297 - INFO - Loading training data...
+2025-02-08 17:38:29,965 - INFO - Train set: X=(784, 33600), Y=(33600,)
+2025-02-08 17:38:29,966 - INFO - Dev set: X=(784, 8400), Y=(8400,)
+2025-02-08 17:38:29,966 - INFO - 
+Running scenario: fast
+2025-02-08 17:38:29,972 - INFO - Starting training...
+2025-02-08 17:38:31,619 - INFO - Epoch 1/5: train_acc=12.70%, dev_acc=13.21%
+2025-02-08 17:38:31,629 - INFO - Model checkpoint saved: Results\checkpoints\fast\model_acc13.21_epoch0.npz
+2025-02-08 17:38:31,630 - INFO - Epoch 0 - Memory Usage: Current: 994.8MB, Peak: 994.8MB, Increase: 340.7MB
+2025-02-08 17:38:33,399 - INFO - Epoch 2/5: train_acc=12.85%, dev_acc=13.35%
+2025-02-08 17:38:33,408 - INFO - Model checkpoint saved: Results\checkpoints\fast\model_acc13.35_epoch1.npz
+2025-02-08 17:38:35,178 - INFO - Epoch 3/5: train_acc=12.97%, dev_acc=13.42%
+2025-02-08 17:38:35,182 - INFO - Model checkpoint saved: Results\checkpoints\fast\model_acc13.42_epoch2.npz
+2025-02-08 17:38:37,260 - INFO - Epoch 4/5: train_acc=13.08%, dev_acc=13.51%
+2025-02-08 17:38:37,270 - INFO - Model checkpoint saved: Results\checkpoints\fast\model_acc13.51_epoch3.npz
+2025-02-08 17:38:39,237 - INFO - Epoch 5/5: train_acc=13.16%, dev_acc=13.63%
+2025-02-08 17:38:39,244 - INFO - Model checkpoint saved: Results\checkpoints\fast\model_acc13.63_epoch4.npz
+2025-02-08 17:38:41,409 - INFO - Scenario fast completed with test accuracy: 13.63%
+2025-02-08 17:38:41,409 - INFO - 
+Running scenario: memory_optimized
+2025-02-08 17:38:41,415 - INFO - Applying data augmentation...
+2025-02-08 17:38:48,823 - INFO - Augmented data shape: X=(784, 100800), Y=(100800,)
+2025-02-08 17:38:48,901 - INFO - Starting training...
+2025-02-08 17:38:54,128 - INFO - Epoch 1/2: train_acc=18.32%, dev_acc=18.18%
+2025-02-08 17:38:54,141 - INFO - Model checkpoint saved: Results\checkpoints\memory_optimized\model_acc18.18_epoch0.npz
+2025-02-08 17:38:54,141 - INFO - Epoch 0 - Memory Usage: Current: 2248.4MB, Peak: 2248.4MB, Increase: 1560.5MB
+2025-02-08 17:38:59,631 - INFO - Epoch 2/2: train_acc=18.39%, dev_acc=18.31%
+2025-02-08 17:38:59,641 - INFO - Model checkpoint saved: Results\checkpoints\memory_optimized\model_acc18.31_epoch1.npz
+2025-02-08 17:39:03,623 - INFO - Scenario memory_optimized completed with test accuracy: 18.31%
+2025-02-08 17:39:05,779 - INFO - Model pipeline completed successfully

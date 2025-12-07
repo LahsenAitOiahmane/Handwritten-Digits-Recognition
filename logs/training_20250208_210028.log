@@ -1,0 +1,105 @@
+2025-02-08 21:00:28,826 - INFO - Logging configured. Log file: logs\training_20250208_210028.log
+2025-02-08 21:00:28,828 - INFO - Starting model pipeline...
+2025-02-08 21:00:28,828 - INFO - Loading training data...
+2025-02-08 21:00:30,885 - INFO - Train set: X=(784, 33600), Y=(33600,)
+2025-02-08 21:00:30,885 - INFO - Dev set: X=(784, 8400), Y=(8400,)
+2025-02-08 21:00:30,885 - INFO - 
+Running scenario: fast
+2025-02-08 21:00:30,895 - INFO - Starting training...
+2025-02-08 21:00:33,282 - INFO - Epoch 1/21: cost=2.4047, train_acc=8.77%, dev_acc=9.25%
+2025-02-08 21:00:33,291 - INFO - Model checkpoint saved: Results\checkpoints\fast\model_acc9.25_epoch0.npz
+2025-02-08 21:00:33,291 - INFO - Epoch 0 - Memory Usage: Current: 997.9MB, Peak: 997.9MB, Increase: 342.8MB
+2025-02-08 21:00:35,500 - INFO - Epoch 2/21: cost=2.4016, train_acc=8.88%, dev_acc=9.32%
+2025-02-08 21:00:35,505 - INFO - Model checkpoint saved: Results\checkpoints\fast\model_acc9.32_epoch1.npz
+2025-02-08 21:00:37,847 - INFO - Epoch 3/21: cost=2.3984, train_acc=8.93%, dev_acc=9.40%
+2025-02-08 21:00:37,855 - INFO - Model checkpoint saved: Results\checkpoints\fast\model_acc9.40_epoch2.npz
+2025-02-08 21:00:40,028 - INFO - Epoch 4/21: cost=2.3953, train_acc=8.99%, dev_acc=9.51%
+2025-02-08 21:00:40,038 - INFO - Model checkpoint saved: Results\checkpoints\fast\model_acc9.51_epoch3.npz
+2025-02-08 21:00:42,289 - INFO - Epoch 5/21: cost=2.3922, train_acc=9.07%, dev_acc=9.56%
+2025-02-08 21:00:42,297 - INFO - Model checkpoint saved: Results\checkpoints\fast\model_acc9.56_epoch4.npz
+2025-02-08 21:00:45,334 - INFO - Epoch 6/21: cost=2.3892, train_acc=9.09%, dev_acc=9.60%
+2025-02-08 21:00:45,346 - INFO - Model checkpoint saved: Results\checkpoints\fast\model_acc9.60_epoch5.npz
+2025-02-08 21:00:47,930 - INFO - Epoch 7/21: cost=2.3862, train_acc=9.18%, dev_acc=9.71%
+2025-02-08 21:00:47,940 - INFO - Model checkpoint saved: Results\checkpoints\fast\model_acc9.71_epoch6.npz
+2025-02-08 21:00:51,036 - INFO - Epoch 8/21: cost=2.3832, train_acc=9.23%, dev_acc=9.77%
+2025-02-08 21:00:51,049 - INFO - Model checkpoint saved: Results\checkpoints\fast\model_acc9.77_epoch7.npz
+2025-02-08 21:00:53,523 - INFO - Epoch 9/21: cost=2.3803, train_acc=9.32%, dev_acc=9.81%
+2025-02-08 21:00:53,532 - INFO - Model checkpoint saved: Results\checkpoints\fast\model_acc9.81_epoch8.npz
+2025-02-08 21:00:58,882 - INFO - Epoch 10/21: cost=2.3774, train_acc=9.42%, dev_acc=9.89%
+2025-02-08 21:00:58,896 - INFO - Model checkpoint saved: Results\checkpoints\fast\model_acc9.89_epoch9.npz
+2025-02-08 21:01:01,521 - INFO - Epoch 11/21: cost=2.3745, train_acc=9.49%, dev_acc=9.94%
+2025-02-08 21:01:01,529 - INFO - Model checkpoint saved: Results\checkpoints\fast\model_acc9.94_epoch10.npz
+2025-02-08 21:01:01,530 - INFO - Epoch 10 - Memory Usage: Current: 998.9MB, Peak: 998.9MB, Increase: 343.8MB
+2025-02-08 21:01:05,397 - INFO - Epoch 12/21: cost=2.3716, train_acc=9.55%, dev_acc=10.04%
+2025-02-08 21:01:05,407 - INFO - Model checkpoint saved: Results\checkpoints\fast\model_acc10.04_epoch11.npz
+2025-02-08 21:01:08,432 - INFO - Epoch 13/21: cost=2.3688, train_acc=9.61%, dev_acc=10.13%
+2025-02-08 21:01:08,446 - INFO - Model checkpoint saved: Results\checkpoints\fast\model_acc10.13_epoch12.npz
+2025-02-08 21:01:11,303 - INFO - Epoch 14/21: cost=2.3660, train_acc=9.69%, dev_acc=10.18%
+2025-02-08 21:01:11,314 - INFO - Model checkpoint saved: Results\checkpoints\fast\model_acc10.18_epoch13.npz
+2025-02-08 21:01:14,135 - INFO - Epoch 15/21: cost=2.3632, train_acc=9.78%, dev_acc=10.25%
+2025-02-08 21:01:14,145 - INFO - Model checkpoint saved: Results\checkpoints\fast\model_acc10.25_epoch14.npz
+2025-02-08 21:01:17,707 - INFO - Epoch 16/21: cost=2.3605, train_acc=9.84%, dev_acc=10.32%
+2025-02-08 21:01:17,718 - INFO - Model checkpoint saved: Results\checkpoints\fast\model_acc10.32_epoch15.npz
+2025-02-08 21:01:20,526 - INFO - Epoch 17/21: cost=2.3578, train_acc=9.92%, dev_acc=10.35%
+2025-02-08 21:01:20,538 - INFO - Model checkpoint saved: Results\checkpoints\fast\model_acc10.35_epoch16.npz
+2025-02-08 21:01:23,402 - INFO - Epoch 18/21: cost=2.3551, train_acc=9.96%, dev_acc=10.49%
+2025-02-08 21:01:23,419 - INFO - Model checkpoint saved: Results\checkpoints\fast\model_acc10.49_epoch17.npz
+2025-02-08 21:01:26,190 - INFO - Epoch 19/21: cost=2.3524, train_acc=10.06%, dev_acc=10.60%
+2025-02-08 21:01:26,200 - INFO - Model checkpoint saved: Results\checkpoints\fast\model_acc10.60_epoch18.npz
+2025-02-08 21:01:29,052 - INFO - Epoch 20/21: cost=2.3498, train_acc=10.10%, dev_acc=10.76%
+2025-02-08 21:01:29,062 - INFO - Model checkpoint saved: Results\checkpoints\fast\model_acc10.76_epoch19.npz
+2025-02-08 21:01:31,707 - INFO - Epoch 21/21: cost=2.3471, train_acc=10.18%, dev_acc=10.81%
+2025-02-08 21:01:31,725 - INFO - Model checkpoint saved: Results\checkpoints\fast\model_acc10.81_epoch20.npz
+2025-02-08 21:01:31,726 - INFO - Epoch 20 - Memory Usage: Current: 998.5MB, Peak: 998.9MB, Increase: 343.3MB
+2025-02-08 21:01:36,047 - INFO - Scenario fast completed with test accuracy: 10.81%
+2025-02-08 21:01:36,047 - INFO - 
+Running scenario: memory_optimized
+2025-02-08 21:01:36,066 - INFO - Applying data augmentation...
+2025-02-08 21:01:49,538 - INFO - Augmented data shape: X=(784, 100800), Y=(100800,)
+2025-02-08 21:01:49,635 - INFO - Starting training...
+2025-02-08 21:01:56,909 - INFO - Epoch 1/21: cost=2.3431, train_acc=10.20%, dev_acc=10.52%
+2025-02-08 21:01:56,922 - INFO - Model checkpoint saved: Results\checkpoints\memory_optimized\model_acc10.52_epoch0.npz
+2025-02-08 21:01:56,922 - INFO - Epoch 0 - Memory Usage: Current: 1928.0MB, Peak: 1928.0MB, Increase: 1222.9MB
+2025-02-08 21:02:02,022 - INFO - Epoch 2/21: cost=2.3425, train_acc=10.24%, dev_acc=10.55%
+2025-02-08 21:02:02,032 - INFO - Model checkpoint saved: Results\checkpoints\memory_optimized\model_acc10.55_epoch1.npz
+2025-02-08 21:02:07,033 - INFO - Epoch 3/21: cost=2.3419, train_acc=10.27%, dev_acc=10.58%
+2025-02-08 21:02:07,048 - INFO - Model checkpoint saved: Results\checkpoints\memory_optimized\model_acc10.58_epoch2.npz
+2025-02-08 21:02:12,096 - INFO - Epoch 4/21: cost=2.3413, train_acc=10.30%, dev_acc=10.64%
+2025-02-08 21:02:12,110 - INFO - Model checkpoint saved: Results\checkpoints\memory_optimized\model_acc10.64_epoch3.npz
+2025-02-08 21:02:17,603 - INFO - Epoch 5/21: cost=2.3407, train_acc=10.33%, dev_acc=10.77%
+2025-02-08 21:02:17,616 - INFO - Model checkpoint saved: Results\checkpoints\memory_optimized\model_acc10.77_epoch4.npz
+2025-02-08 21:02:22,686 - INFO - Epoch 6/21: cost=2.3401, train_acc=10.36%, dev_acc=10.81%
+2025-02-08 21:02:22,698 - INFO - Model checkpoint saved: Results\checkpoints\memory_optimized\model_acc10.81_epoch5.npz
+2025-02-08 21:02:28,525 - INFO - Epoch 7/21: cost=2.3396, train_acc=10.38%, dev_acc=10.85%
+2025-02-08 21:02:28,535 - INFO - Model checkpoint saved: Results\checkpoints\memory_optimized\model_acc10.85_epoch6.npz
+2025-02-08 21:02:35,053 - INFO - Epoch 8/21: cost=2.3390, train_acc=10.43%, dev_acc=10.86%
+2025-02-08 21:02:35,063 - INFO - Model checkpoint saved: Results\checkpoints\memory_optimized\model_acc10.86_epoch7.npz
+2025-02-08 21:02:40,014 - INFO - Epoch 9/21: cost=2.3384, train_acc=10.46%, dev_acc=10.90%
+2025-02-08 21:02:40,025 - INFO - Model checkpoint saved: Results\checkpoints\memory_optimized\model_acc10.90_epoch8.npz
+2025-02-08 21:02:45,501 - INFO - Epoch 10/21: cost=2.3378, train_acc=10.49%, dev_acc=10.92%
+2025-02-08 21:02:45,511 - INFO - Model checkpoint saved: Results\checkpoints\memory_optimized\model_acc10.92_epoch9.npz
+2025-02-08 21:02:50,799 - INFO - Epoch 11/21: cost=2.3373, train_acc=10.53%, dev_acc=10.93%
+2025-02-08 21:02:50,810 - INFO - Model checkpoint saved: Results\checkpoints\memory_optimized\model_acc10.93_epoch10.npz
+2025-02-08 21:02:50,811 - INFO - Epoch 10 - Memory Usage: Current: 1928.2MB, Peak: 1928.2MB, Increase: 1223.1MB
+2025-02-08 21:02:55,702 - INFO - Epoch 12/21: cost=2.3367, train_acc=10.56%, dev_acc=11.00%
+2025-02-08 21:02:55,715 - INFO - Model checkpoint saved: Results\checkpoints\memory_optimized\model_acc11.00_epoch11.npz
+2025-02-08 21:03:00,569 - INFO - Epoch 13/21: cost=2.3361, train_acc=10.59%, dev_acc=11.05%
+2025-02-08 21:03:00,581 - INFO - Model checkpoint saved: Results\checkpoints\memory_optimized\model_acc11.05_epoch12.npz
+2025-02-08 21:03:05,558 - INFO - Epoch 14/21: cost=2.3355, train_acc=10.64%, dev_acc=11.08%
+2025-02-08 21:03:05,567 - INFO - Model checkpoint saved: Results\checkpoints\memory_optimized\model_acc11.08_epoch13.npz
+2025-02-08 21:03:12,091 - INFO - Epoch 15/21: cost=2.3349, train_acc=10.67%, dev_acc=11.13%
+2025-02-08 21:03:12,100 - INFO - Model checkpoint saved: Results\checkpoints\memory_optimized\model_acc11.13_epoch14.npz
+2025-02-08 21:03:17,573 - INFO - Epoch 16/21: cost=2.3344, train_acc=10.69%, dev_acc=11.19%
+2025-02-08 21:03:17,586 - INFO - Model checkpoint saved: Results\checkpoints\memory_optimized\model_acc11.19_epoch15.npz
+2025-02-08 21:03:23,215 - INFO - Epoch 17/21: cost=2.3338, train_acc=10.72%, dev_acc=11.21%
+2025-02-08 21:03:23,223 - INFO - Model checkpoint saved: Results\checkpoints\memory_optimized\model_acc11.21_epoch16.npz
+2025-02-08 21:03:28,110 - INFO - Epoch 18/21: cost=2.3332, train_acc=10.76%, dev_acc=11.25%
+2025-02-08 21:03:28,124 - INFO - Model checkpoint saved: Results\checkpoints\memory_optimized\model_acc11.25_epoch17.npz
+2025-02-08 21:03:32,810 - INFO - Epoch 19/21: cost=2.3327, train_acc=10.79%, dev_acc=11.30%
+2025-02-08 21:03:32,821 - INFO - Model checkpoint saved: Results\checkpoints\memory_optimized\model_acc11.30_epoch18.npz
+2025-02-08 21:03:37,530 - INFO - Epoch 20/21: cost=2.3321, train_acc=10.83%, dev_acc=11.30%
+2025-02-08 21:03:42,069 - INFO - Epoch 21/21: cost=2.3315, train_acc=10.86%, dev_acc=11.32%
+2025-02-08 21:03:42,076 - INFO - Model checkpoint saved: Results\checkpoints\memory_optimized\model_acc11.32_epoch20.npz
+2025-02-08 21:03:42,076 - INFO - Epoch 20 - Memory Usage: Current: 1928.2MB, Peak: 1928.2MB, Increase: 1223.1MB
+2025-02-08 21:03:45,486 - INFO - Scenario memory_optimized completed with test accuracy: 11.32%
+2025-02-08 21:03:47,313 - INFO - Model pipeline completed successfully
