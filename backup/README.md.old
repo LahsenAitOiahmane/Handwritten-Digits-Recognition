@@ -1,0 +1,220 @@
+# Deep Neural Network for MNIST Digit Classification
+
+## Project Overview
+This project implements a deep neural network for handwritten digit classification using the MNIST dataset. The model achieves ~98% accuracy using a three-layer architecture with modern optimization techniques.
+
+## Table of Contents
+1. [Mathematical Foundation](#mathematical-foundation)
+2. [Architecture Details](#architecture-details)
+3. [Implementation Details](#implementation-details)
+4. [Code Structure](#code-structure)
+5. [Training Process](#training-process)
+6. [Performance Analysis](#performance-analysis)
+
+## Mathematical Foundation
+
+### Neural Network Architecture
+- **Input Layer**: 784 neurons (28×28 pixels)
+- **Hidden Layers**: 2 layers with 512 neurons each
+- **Output Layer**: 10 neurons (digits 0-9)
+
+### Key Mathematical Components
+
+#### 1. Forward Propagation
+For each layer l:
+
+Z[l] = W[l]A[l-1] + b[l] # Linear transformation
+A[l] = g[l](Z[l]) # Activation function
+
+where:
+- W[l]: Weight matrix
+- b[l]: Bias vector
+- g(): ReLU for hidden layers, Softmax for output
+
+#### 2. Activation Functions
+- **ReLU**: f(x) = max(0, x)
+- **Softmax**: f(x_i) = exp(x_i) / Σ(exp(x_j))
+
+#### 3. Loss Function
+Cross-entropy loss:
+```python
+L = -(1/m)·Σ(y_i·log(ŷ_i))
+```
+where:
+- y_i: True labels
+- ŷ_i: Predicted probabilities
+- m: Number of examples
+
+#### 4. Backpropagation
+Chain rule application:
+```python
+dZ[L] = A[L] - Y            # Output layer
+dW[L] = (1/m)·dZ[L]·A[L-1]ᵀ
+db[L] = (1/m)·Σ(dZ[L])
+```
+
+## Architecture Details
+
+### Layer Configuration
+1. **Input Layer**
+   - Size: 784 (28×28 flattened image)
+   - Normalization: Pixel values scaled to [0,1]
+
+2. **Hidden Layers**
+   - Two layers of 512 neurons each
+   - ReLU activation
+   - Dropout (20% rate)
+   - He initialization
+
+3. **Output Layer**
+   - 10 neurons (one per digit)
+   - Softmax activation
+
+### Regularization Techniques
+1. **Dropout**
+   - Rate: 0.2 (20% neurons dropped)
+   - Applied only during training
+   - Scaled by 1/(1-dropout_rate) during inference
+
+2. **Early Stopping**
+   - Monitors validation loss
+   - Patience: 20 epochs
+   - Saves best model
+
+## Implementation Details
+
+### Key Classes
+
+1. **DataPreprocessor**
+   - Data loading and normalization
+   - Batch generation
+   - Data augmentation
+   ```python
+   X = X / 255.  # Normalize to [0,1]
+   ```
+
+2. **NeuralNetwork**
+   - Forward/backward propagation
+   - Parameter initialization
+   - Cost computation
+
+3. **ModelTrainer**
+   - Training loop management
+   - Adam optimization
+   - Learning rate scheduling
+
+4. **ModelEvaluator**
+   - Prediction generation
+   - Metrics calculation
+   - Visualization tools
+
+### Optimization Strategy
+
+#### Adam Optimizer
+```python
+v = β1·v + (1-β1)·dW        # Momentum
+s = β2·s + (1-β2)·dW²       # RMSprop
+v_corrected = v/(1-β1ᵗ)     # Bias correction
+s_corrected = s/(1-β2ᵗ)
+W = W - α·v_corrected/√(s_corrected + ε)
+```
+
+Parameters:
+- Learning rate (α): 0.001
+- β1: 0.9
+- β2: 0.999
+- ε: 1e-8
+
+## Code Structure
+
+```
+project/
+│
+├── Models/
+│   └── FINAL_MODEL.py      # Main model implementation
+│
+├── Data/
+│   ├── train.csv          # Training data
+│   ├── test.csv           # Test data
+│   └── trained_model.npz  # Saved model parameters
+│
+└── training_history.png   # Training visualization
+```
+
+## Training Process
+
+### Data Preprocessing
+1. Load MNIST data
+2. Normalize pixel values
+3. Split into train/dev sets
+4. Apply data augmentation:
+   - Original images
+   - Rotated versions
+   - Noisy versions
+
+### Training Loop
+1. Mini-batch gradient descent
+2. Adam optimization
+3. Learning rate decay
+4. Early stopping
+5. Model checkpointing
+
+### Hyperparameters
+```python
+batch_size = 128
+learning_rate = 0.001
+epochs = 1000
+dropout_rate = 0.2
+```
+
+## Performance Analysis
+
+### Metrics
+- Training accuracy: ~99%
+- Validation accuracy: ~98%
+- Test accuracy: ~98%
+
+### Per-Class Performance
+- Precision, Recall, F1-score for each digit
+- Confusion matrix analysis
+
+### Visualization
+1. Training/validation loss curves
+2. Accuracy progression
+3. Sample predictions
+
+## Usage
+
+```bash
+**Train new model**
+python Models/FINAL_MODEL.py
+
+
+**Continue training**
+python Models/FINAL_MODEL.py --continue_training
+
+**Evaluate only**
+python Models/FINAL_MODEL.py --evaluate
+```
+
+
+
+## Dependencies
+- numpy
+- pandas
+- matplotlib
+- logging
+
+## Future Improvements
+1. Convolutional layers
+2. Batch normalization
+3. Learning rate warmup
+4. Cross-validation
+5. Model ensemble
+
+## References
+1. Deep Learning (Goodfellow et al.)
+2. Adam optimizer paper
+3. Dropout paper
+4. MNIST dataset paper
+

@@ -1,0 +1,1461 @@
+import numpy as np
+import pandas as pd
+import os
+from matplotlib import pyplot as plt
+import logging
+from typing import Tuple, Optional
+from dataclasses import dataclass
+import time
+import argparse
+import gc
+import psutil
+import torch  # For GPU memory tracking if available
+import json
+from collections import Counter
+from datetime import datetime
+
+# Configure logging to track training progress
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(levelname)s - %(message)s',
+    handlers=[
+        logging.FileHandler('model_training.log'),
+        logging.StreamHandler()
+    ]
+)
+
+@dataclass
+class ModelConfig:
+    """Configuration for model training and architecture."""
+    
+    # Architecture parameters
+    learning_rate: float = 0.001
+    dev_set_size: float = 0.2
+    initial_hidden_size: int = 128
+    final_hidden_size: int = 512
+    growth_rate: int = 64
+    input_size: int = 784
+    output_size: int = 10
+    growth_epochs: int = 10
+    
+    # Training parameters
+    batch_size: int = 128
+    batch_accumulation: int = 4
+    iterations: int = 1000
+    initial_learning_rate: float = 0.001
+    min_learning_rate: float = 1e-6
+    
+    # Adam optimizer parameters
+    beta1: float = 0.9
+    beta2: float = 0.999
+    epsilon: float = 1e-8
+    gradient_clip_threshold: float = 5.0
+    
+    # Learning rate schedule
+    warmup_epochs: int = 5
+    decay_patience: int = 10
+    learning_rate_decay: float = 0.95
+    
+    # Regularization
+    dropout_rate: float = 0.2
+    early_stopping_patience: int = 20
+    
+    # Memory management
+    monitor_memory: bool = True
+    max_memory_percent: float = 80.0
+    gc_frequency: int = 5
+    
+    # Data augmentation
+    use_augmentation: bool = True
+    rotation_range: float = 15.0
+    noise_factor: float = 0.1
+
+# Create global configuration instance
+config = ModelConfig()
+
+class DataPreprocessor:
+    """Handles all data loading and preprocessing operations with memory efficiency."""
+    
+    @staticmethod
+    def load_and_preprocess_data() -> Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+        """
+        Loads and preprocesses training data with memory optimization.
+        """
+        try:
+            logging.info("Loading training data...")
+            # Use chunks to load large CSV files
+            chunks = pd.read_csv('Data/train.csv', chunksize=1000)
+            data_list = []
+            
+            for chunk in chunks:
+                # Convert to float32 for memory efficiency
+                chunk = chunk.astype(np.float32)
+                data_list.append(chunk.values)
+                MemoryMonitor.check_memory_usage(config)
+            
+            data = np.vstack(data_list)
+            del data_list  # Free memory
+            gc.collect()
+            
+            m, n = data.shape
+            
+            # Shuffle with memory efficiency
+            indices = np.random.permutation(m)
+            data = data[indices]
+            
+            dev_size = int(config.dev_set_size * m)
+            
+            # Split and transpose data
+            data_dev = data[:dev_size].T
+            Y_dev = data_dev[0].astype(np.int32)  # Labels as int32
+            X_dev = data_dev[1:n] / 255.  # Normalize to [0,1]
+            
+            data_train = data[dev_size:].T
+            Y_train = data_train[0].astype(np.int32)
+            X_train = data_train[1:n] / 255.
+            
+            del data  # Free memory
+            gc.collect()
+            
+            logging.info(f"Train set shape: X={X_train.shape}, Y={Y_train.shape}")
+            logging.info(f"Dev set shape: X={X_dev.shape}, Y={Y_dev.shape}")
+            
+            return X_train, Y_train, X_dev, Y_dev
+            
+        except Exception as e:
+            logging.error(f"Error in data loading: {str(e)}")
+            raise
+
+    @staticmethod
+    def load_test_data() -> Tuple[np.ndarray, Optional[np.ndarray]]:
+        """
+        Loads and preprocesses test data.
+        Returns X_test and Y_test (if labels are available)
+        """
+        try:
+            logging.info("Loading test data...")
+            data = pd.read_csv('Data/test.csv')
+            data = np.array(data)
+            
+            # Handle test data with or without labels
+            if data.shape[1] == 785:  # If labels are present (785 = 784 pixels + 1 label)
+                data_test = data.T
+                Y_test = data_test[0]  # First row contains labels
+                X_test = data_test[1:]  # Remaining rows are features
+            else:  # If no labels (784 pixels only)
+                data_test = data.T
+                Y_test = None
+                X_test = data_test
+                
+            X_test = X_test / 255.  # Normalize pixel values to [0,1]
+            logging.info(f"Test set shape: X={X_test.shape}")
+            
+            return X_test, Y_test
+            
+        except Exception as e:
+            logging.error(f"Error loading test data: {str(e)}")
+            raise
+
+    @staticmethod
+    def get_batch(X: np.ndarray, Y: np.ndarray, batch_size: int) -> list:
+        """Memory-efficient batch generation."""
+        m = X.shape[1]
+        batches = []
+        
+        # Create indices for batches
+        indices = np.random.permutation(m)
+        num_complete_batches = m // batch_size
+        
+        for k in range(num_complete_batches):
+            batch_indices = indices[k * batch_size:(k + 1) * batch_size]
+            batch_X = X[:, batch_indices]
+            batch_Y = Y[batch_indices]
+            batches.append((batch_X, batch_Y))
+            
+            MemoryMonitor.check_memory_usage(config)
+        
+        # Handle last incomplete batch
+        if m % batch_size != 0:
+            batch_indices = indices[num_complete_batches * batch_size:]
+            batch_X = X[:, batch_indices]
+            batch_Y = Y[batch_indices]
+            batches.append((batch_X, batch_Y))
+        
+        return batches
+
+    @staticmethod
+    def augment_data(X: np.ndarray, Y: np.ndarray) -> Tuple[np.ndarray, np.ndarray]:
+        """
+        Performs data augmentation to increase dataset size and variety.
+        Creates 3 versions of each image: original, rotated, and noisy.
+        """
+        logging.info("Performing data augmentation...")
+        X_augmented = []
+        Y_augmented = []
+        
+        for i in range(X.shape[1]):  # Iterate through each sample
+            img = X[:, i].reshape(28, 28)  # Reshape to 2D image
+            
+            # Add original image
+            X_augmented.append(X[:, i])
+            Y_augmented.append(Y[i])
+            
+            # Add rotated version (90 degrees)
+            rotated = np.rot90(img, k=1, axes=(0, 1))
+            X_augmented.append(rotated.reshape(-1))  # Flatten back to 1D
+            Y_augmented.append(Y[i])
+            
+            # Add noisy version (Gaussian noise)
+            noisy = img + np.random.normal(0, config.noise_std, img.shape)
+            noisy = np.clip(noisy, 0, 1)  # Ensure values stay in [0,1]
+            X_augmented.append(noisy.reshape(-1))
+            Y_augmented.append(Y[i])
+        
+        # Convert lists to arrays and transpose X to maintain (features × samples) shape
+        X_aug = np.array(X_augmented).T
+        Y_aug = np.array(Y_augmented)
+        logging.info(f"Augmented data shape: X={X_aug.shape}, Y={Y_aug.shape}")
+        
+        return X_aug, Y_aug
+
+class NeuralNetwork:
+    """Implements a growing neural network with memory-efficient operations."""
+    
+    @staticmethod
+    def initialize_parameters(current_size: Optional[int] = None) -> dict:
+        """
+        Initialize parameters with careful scaling for natural learning progression.
+        Uses Xavier/He initialization with size adjustment.
+        """
+        hidden_size = current_size or config.initial_hidden_size
+        
+        # Initialize with smaller weights for natural progression
+        scale_1 = np.sqrt(1. / config.input_size) * 0.1
+        scale_2 = np.sqrt(1. / hidden_size) * 0.1
+        scale_3 = np.sqrt(1. / hidden_size) * 0.1
+        
+        # Use float32 for memory efficiency
+        parameters = {
+            'W1': np.random.randn(hidden_size, config.input_size).astype(np.float32) * scale_1,
+            'b1': np.zeros((hidden_size, 1), dtype=np.float32),
+            'W2': np.random.randn(hidden_size, hidden_size).astype(np.float32) * scale_2,
+            'b2': np.zeros((hidden_size, 1), dtype=np.float32),
+            'W3': np.random.randn(config.output_size, hidden_size).astype(np.float32) * scale_3,
+            'b3': np.zeros((config.output_size, 1), dtype=np.float32)
+        }
+        
+        return parameters
+
+    @staticmethod
+    def grow_network(parameters: dict, epoch: int) -> dict:
+        """
+        Gradually increase network size based on training progress.
+        """
+        if epoch % config.growth_epochs == 0 and epoch > 0:
+            current_size = parameters['W1'].shape[0]
+            target_size = min(
+                current_size + 64,  # Grow by 64 neurons
+                config.final_hidden_size
+            )
+            
+            if current_size < target_size:
+                logging.info(f"Growing network from {current_size} to {target_size} neurons")
+                
+                # Initialize new parameters
+                new_params = NeuralNetwork.initialize_parameters(target_size)
+                
+                # Copy existing weights
+                new_params['W1'][:current_size] = parameters['W1']
+                new_params['b1'][:current_size] = parameters['b1']
+                new_params['W2'][:current_size, :current_size] = parameters['W2']
+                new_params['b2'][:current_size] = parameters['b2']
+                new_params['W3'][:, :current_size] = parameters['W3']
+                
+                parameters = new_params
+                gc.collect()
+        
+        return parameters
+
+    @staticmethod
+    def ReLU(Z: np.ndarray) -> np.ndarray:
+        """
+        Rectified Linear Unit (ReLU) activation function.
+        f(x) = max(0, x)
+        """
+        return np.maximum(0, Z)
+
+    @staticmethod
+    def ReLU_derivative(Z: np.ndarray) -> np.ndarray:
+        """
+        Derivative of ReLU activation function.
+        f'(x) = 1 if x > 0, else 0
+        """
+        return Z > 0
+
+    @staticmethod
+    def softmax(Z: np.ndarray) -> np.ndarray:
+        """
+        Softmax activation function for output layer.
+        f(x_i) = exp(x_i) / Σ(exp(x_j))
+        
+        Numerically stable implementation using max subtraction.
+        """
+        # Subtract max for numerical stability (prevents overflow)
+        Z_shifted = Z - np.max(Z, axis=0, keepdims=True)
+        exp_values = np.exp(Z_shifted)
+        return exp_values / np.sum(exp_values, axis=0, keepdims=True)
+
+    @staticmethod
+    def forward_propagation(parameters: dict, X: np.ndarray, training: bool = True) -> Tuple[dict, dict]:
+        """Memory-efficient forward propagation with intermediate cleanup."""
+        cache = {}
+        
+        # First layer
+        Z1 = np.dot(parameters['W1'], X) + parameters['b1']
+        cache['Z1'] = Z1  # Store Z1 in cache
+        cache['A1'] = NeuralNetwork.ReLU(Z1)
+        
+        if training:
+            cache['A1'] *= np.random.binomial(1, 1-config.dropout_rate, cache['A1'].shape) / (1-config.dropout_rate)
+        
+        # Second layer
+        Z2 = np.dot(parameters['W2'], cache['A1']) + parameters['b2']
+        cache['Z2'] = Z2  # Store Z2 in cache
+        cache['A2'] = NeuralNetwork.ReLU(Z2)
+        
+        if training:
+            cache['A2'] *= np.random.binomial(1, 1-config.dropout_rate, cache['A2'].shape) / (1-config.dropout_rate)
+        
+        # Output layer
+        Z3 = np.dot(parameters['W3'], cache['A2']) + parameters['b3']
+        cache['Z3'] = Z3  # Store Z3 in cache
+        cache['A3'] = NeuralNetwork.softmax(Z3)
+        
+        MemoryMonitor.check_memory_usage(config)
+        
+        return cache['A3'], cache
+
+    @staticmethod
+    def backward_propagation(Z1: np.ndarray, A1: np.ndarray,
+                           Z2: np.ndarray, A2: np.ndarray,
+                           W2: np.ndarray, W3: np.ndarray,
+                           Z3: np.ndarray, A3: np.ndarray,
+                           X: np.ndarray, Y: np.ndarray) -> Tuple[np.ndarray, ...]:
+        """
+        Compute gradients for backpropagation with memory efficiency.
+        
+        Args:
+            Z1, A1: First layer pre-activations and activations
+            Z2, A2: Second layer pre-activations and activations
+            W2, W3: Weight matrices
+            Z3, A3: Output layer pre-activations and activations
+            X: Input data
+            Y: True labels
+            
+        Returns:
+            dW1, db1, dW2, db2, dW3, db3: Gradients for all parameters
+        """
+        m = X.shape[1]
+        
+        # Output layer gradients
+        dZ3 = A3 - Y
+        dW3 = (1/m) * np.dot(dZ3, A2.T)
+        db3 = (1/m) * np.sum(dZ3, axis=1, keepdims=True)
+        
+        # Second hidden layer gradients
+        dZ2 = np.multiply(np.dot(W3.T, dZ3), NeuralNetwork.ReLU_derivative(Z2))
+        dW2 = (1/m) * np.dot(dZ2, A1.T)
+        db2 = (1/m) * np.sum(dZ2, axis=1, keepdims=True)
+        
+        # First hidden layer gradients
+        dZ1 = np.multiply(np.dot(W2.T, dZ2), NeuralNetwork.ReLU_derivative(Z1))
+        dW1 = (1/m) * np.dot(dZ1, X.T)
+        db1 = (1/m) * np.sum(dZ1, axis=1, keepdims=True)
+        
+        # Memory cleanup
+        del dZ3, dZ2, dZ1
+        gc.collect()
+        
+        return dW1, db1, dW2, db2, dW3, db3
+
+    @staticmethod
+    def compute_cost(A3: np.ndarray, Y: np.ndarray) -> float:
+        """
+        Computes the cross-entropy cost with numerical stability.
+        
+        Cost = -(1/m) × Σ(y_i × log(a_i))
+        where y_i is the true label and a_i is the predicted probability
+        """
+        m = Y.size
+        
+        # Convert to one-hot encoding
+        one_hot_Y = np.zeros((m, config.output_size))
+        one_hot_Y[np.arange(m), Y.astype(int)] = 1
+        one_hot_Y = one_hot_Y.T
+        
+        # Add epsilon for numerical stability (prevent log(0))
+        epsilon = 1e-15
+        cost = -(1/m) * np.sum(one_hot_Y * np.log(A3 + epsilon))
+        
+        return cost
+
+class ModelTrainer:
+    """Handles model training with memory efficiency and natural learning progression."""
+
+    @staticmethod
+    def get_learning_rate(epoch: int, initial_lr: float) -> float:
+        """
+        Implements learning rate scheduling with warmup and decay.
+        
+        Args:
+            epoch: Current epoch number
+            initial_lr: Initial learning rate
+            
+        Returns:
+            float: Current learning rate
+        """
+        if epoch < config.warmup_epochs:
+            # Linear warmup
+            return initial_lr * (epoch + 1) / config.warmup_epochs
+        else:
+            # Exponential decay with cosine annealing
+            decay = config.learning_rate_decay ** ((epoch - config.warmup_epochs) // config.decay_patience)
+            cosine_decay = 0.5 * (1 + np.cos(np.pi * (epoch - config.warmup_epochs) / config.iterations))
+            
+            return max(
+                initial_lr * decay * cosine_decay,
+                config.min_learning_rate
+            )
+
+    @staticmethod
+    def update_parameters_with_adam(parameters: dict, gradients: dict, 
+                                  v: dict, s: dict, t: int, 
+                                  accumulated_batches: int,
+                                  learning_rate: float) -> Tuple[dict, dict, dict]:
+        """
+        Update parameters using Adam optimization with gradient accumulation.
+        
+        Args:
+            parameters: Current parameter values
+            gradients: Accumulated gradients
+            v: First moment estimates
+            s: Second moment estimates
+            t: Time step
+            accumulated_batches: Number of accumulated batches
+            learning_rate: Current learning rate
+            
+        Returns:
+            parameters: Updated parameters
+            v: Updated first moment estimates
+            s: Updated second moment estimates
+        """
+        # Adam hyperparameters
+        beta1 = config.beta1  # First moment decay rate
+        beta2 = config.beta2  # Second moment decay rate
+        epsilon = config.epsilon  # Numerical stability
+        
+        # Scale gradients by number of accumulated batches
+        scale = 1.0 / accumulated_batches
+        for key in gradients:
+            gradients[key] *= scale
+        
+        v_corrected = {}
+        s_corrected = {}
+        
+        # Update for each parameter
+        for param_name in parameters.keys():
+            # Moving averages
+            v[param_name] = beta1 * v[param_name] + (1 - beta1) * gradients[param_name]
+            s[param_name] = beta2 * s[param_name] + (1 - beta2) * np.square(gradients[param_name])
+            
+            # Bias correction
+            v_corrected[param_name] = v[param_name] / (1 - np.power(beta1, t))
+            s_corrected[param_name] = s[param_name] / (1 - np.power(beta2, t))
+            
+            # Parameter update with gradient clipping
+            update = v_corrected[param_name] / (np.sqrt(s_corrected[param_name]) + epsilon)
+            update_norm = np.linalg.norm(update)
+            
+            # Clip updates if they exceed threshold
+            if update_norm > config.gradient_clip_threshold:
+                update *= config.gradient_clip_threshold / update_norm
+            
+            # Apply update
+            parameters[param_name] -= learning_rate * update
+            
+            # Memory cleanup
+            gradients[param_name] = None
+        
+        # Garbage collection
+        gc.collect()
+        MemoryMonitor.check_memory_usage(config)
+        
+        return parameters, v, s
+
+    @staticmethod
+    def train_model(X_train: np.ndarray, Y_train: np.ndarray, 
+                   X_dev: np.ndarray, Y_dev: np.ndarray,
+                   initial_parameters: Optional[dict] = None) -> Tuple[dict, list, list]:
+        """
+        Trains the neural network with memory optimization and natural progression.
+        
+        Args:
+            X_train: Training features (784 × m)
+            Y_train: Training labels (m,)
+            X_dev: Development features
+            Y_dev: Development labels
+            initial_parameters: Optional pre-trained parameters
+            
+        Returns:
+            parameters: Trained model parameters
+            train_costs: Training cost history
+            dev_costs: Development cost history
+        """
+        logging.info("Starting model training...")
+        
+        # Initialize or load parameters
+        parameters = initial_parameters or NeuralNetwork.initialize_parameters()
+        
+        # Initialize optimizer parameters
+        v = {key: np.zeros_like(value) for key, value in parameters.items()}
+        s = {key: np.zeros_like(value) for key, value in parameters.items()}
+        
+        # Initialize tracking variables
+        train_costs = []
+        dev_costs = []
+        train_accuracies = []
+        dev_accuracies = []
+        best_dev_cost = float('inf')
+        patience_counter = 0
+        t = 0
+        accumulated_gradients = None
+        accumulated_batches = 0
+        
+        for epoch in range(config.iterations):
+            epoch_cost = 0
+            batches = DataPreprocessor.get_batch(X_train, Y_train, config.batch_size)
+            current_lr = ModelTrainer.get_learning_rate(epoch, config.initial_learning_rate)
+            
+            # Training loop
+            for batch_X, batch_Y in batches:
+                # Forward propagation
+                A3, cache = NeuralNetwork.forward_propagation(parameters, batch_X, training=True)
+                
+                # Compute cost
+                batch_cost = NeuralNetwork.compute_cost(A3, batch_Y)
+                epoch_cost += batch_cost
+                
+                # Backward propagation
+                dW1, db1, dW2, db2, dW3, db3 = NeuralNetwork.backward_propagation(
+                    cache['Z1'], cache['A1'],
+                    cache['Z2'], cache['A2'],
+                    parameters['W2'], parameters['W3'],
+                    cache['Z3'], A3, batch_X, batch_Y
+                )
+                
+                # Organize gradients
+                gradients = {
+                    'W1': dW1, 'b1': db1,
+                    'W2': dW2, 'b2': db2,
+                    'W3': dW3, 'b3': db3
+                }
+                
+                # Gradient accumulation
+                if accumulated_gradients is None:
+                    accumulated_gradients = gradients
+                else:
+                    for key in gradients:
+                        accumulated_gradients[key] += gradients[key]
+                
+                accumulated_batches += 1
+                
+                # Update parameters when enough batches are accumulated
+                if accumulated_batches == config.batch_accumulation:
+                    t += 1
+                    parameters, v, s = ModelTrainer.update_parameters_with_adam(
+                        parameters, accumulated_gradients, v, s, t, 
+                        accumulated_batches, current_lr
+                    )
+                    accumulated_gradients = None
+                    accumulated_batches = 0
+                
+                # Memory cleanup
+                for key in cache:
+                    cache[key] = None
+                gc.collect()
+            
+            # Grow network if needed
+            parameters = NeuralNetwork.grow_network(parameters, epoch)
+            
+            # Calculate metrics
+            train_predictions = ModelEvaluator.predict(parameters, X_train)
+            train_accuracy = np.mean(train_predictions == Y_train) * 100
+            train_accuracies.append(train_accuracy)
+            
+            dev_predictions = ModelEvaluator.predict(parameters, X_dev)
+            dev_accuracy = np.mean(dev_predictions == Y_dev) * 100
+            dev_accuracies.append(dev_accuracy)
+            
+            # Calculate dev cost
+            A3_dev, _ = NeuralNetwork.forward_propagation(parameters, X_dev, training=False)
+            dev_cost = NeuralNetwork.compute_cost(A3_dev, Y_dev)
+            dev_costs.append(dev_cost)
+            
+            # Log progress
+            logging.info(
+                f"Epoch {epoch + 1:4d}/{config.iterations}: "
+                f"cost = {epoch_cost:.4f}, "
+                f"train_acc = {train_accuracy:.2f}%, "
+                f"dev_acc = {dev_accuracy:.2f}%, "
+                f"lr = {current_lr:.6f}"
+            )
+            
+            # Early stopping check
+            if dev_cost < best_dev_cost:
+                best_dev_cost = dev_cost
+                patience_counter = 0
+                ModelTrainer.save_model_parameters(parameters)
+                logging.info(f"New best model saved with dev cost: {dev_cost:.4f}")
+            else:
+                patience_counter += 1
+            
+            # Early stopping
+            if patience_counter >= config.early_stopping_patience:
+                logging.info(f"Early stopping triggered at epoch {epoch + 1}")
+                break
+            
+            # Periodic garbage collection
+            if epoch % config.gc_frequency == 0:
+                gc.collect()
+                MemoryMonitor.check_memory_usage(config)
+        
+        # Plot training history
+        ModelEvaluator.plot_training_history(
+            train_costs, dev_costs, 
+            train_accuracies, dev_accuracies
+        )
+        
+        return parameters, train_costs, dev_costs
+
+    @staticmethod
+    def save_model_parameters(parameters: dict) -> None:
+        """
+        Saves model parameters with error handling.
+        
+        Args:
+            parameters: Model parameters to save
+        """
+        try:
+            # Create directory if it doesn't exist
+            os.makedirs('Data', exist_ok=True)
+            
+            # Save parameters with compression
+            np.savez_compressed('Data/trained_model.npz', **parameters)
+            logging.info("Model parameters saved successfully")
+            
+        except Exception as e:
+            logging.error(f"Error saving model parameters: {str(e)}")
+            raise
+
+    @staticmethod
+    def load_model_parameters() -> dict:
+        """
+        Loads model parameters with error handling.
+        
+        Returns:
+            dict: Loaded model parameters
+        """
+        try:
+            saved_params = np.load('Data/trained_model.npz')
+            parameters = {key: saved_params[key] for key in saved_params.files}
+            logging.info("Model parameters loaded successfully")
+            return parameters
+            
+        except Exception as e:
+            logging.error(f"Error loading model parameters: {str(e)}")
+            raise
+
+class ModelEvaluator:
+    """Handles model evaluation and visualization with comprehensive analysis."""
+    
+    @staticmethod
+    def evaluate_and_visualize(parameters: dict, 
+                             X_train: np.ndarray, Y_train: np.ndarray,
+                             X_dev: np.ndarray, Y_dev: np.ndarray,
+                             X_test: np.ndarray, Y_test: Optional[np.ndarray] = None) -> None:
+        """
+        Comprehensive model evaluation and visualization.
+        
+        Args:
+            parameters: Model parameters
+            X_train, Y_train: Training data
+            X_dev, Y_dev: Development data
+            X_test, Y_test: Test data (Y_test optional)
+        """
+        # Create results directory
+        os.makedirs('Results', exist_ok=True)
+        
+        # Training set evaluation
+        train_predictions = ModelEvaluator.predict(parameters, X_train)
+        train_accuracy, train_metrics = ModelEvaluator.calculate_metrics(train_predictions, Y_train)
+        
+        # Development set evaluation
+        dev_predictions = ModelEvaluator.predict(parameters, X_dev)
+        dev_accuracy, dev_metrics = ModelEvaluator.calculate_metrics(dev_predictions, Y_dev)
+        
+        # Log results
+        logging.info("\nModel Performance Summary:")
+        logging.info("=" * 50)
+        logging.info(f"Training Accuracy: {train_accuracy:.2f}%")
+        logging.info(f"Development Accuracy: {dev_accuracy:.2f}%")
+        
+        # Per-class metrics visualization
+        ModelEvaluator.plot_class_metrics(train_metrics, dev_metrics)
+        
+        # Confusion matrices
+        ModelEvaluator.plot_confusion_matrix(Y_train, train_predictions, "Training")
+        ModelEvaluator.plot_confusion_matrix(Y_dev, dev_predictions, "Development")
+        
+        # Test set evaluation if labels are available
+        if Y_test is not None:
+            test_predictions = ModelEvaluator.predict(parameters, X_test)
+            test_accuracy, test_metrics = ModelEvaluator.calculate_metrics(test_predictions, Y_test)
+            logging.info(f"Test Accuracy: {test_accuracy:.2f}%")
+            ModelEvaluator.plot_confusion_matrix(Y_test, test_predictions, "Test")
+        
+        # Sample predictions visualization
+        ModelEvaluator.visualize_sample_predictions(X_test, test_predictions, Y_test)
+        
+        # Error analysis
+        if Y_test is not None:
+            ModelEvaluator.analyze_errors(X_test, Y_test, test_predictions)
+        
+        # Save detailed report
+        ModelEvaluator.save_evaluation_report(
+            train_metrics, dev_metrics, 
+            test_metrics if Y_test is not None else None
+        )
+
+    @staticmethod
+    def plot_class_metrics(train_metrics: dict, dev_metrics: dict) -> None:
+        """Plot per-class performance metrics."""
+        plt.figure(figsize=(15, 5))
+        
+        # Prepare data
+        classes = range(10)
+        train_f1 = [train_metrics[f'class_{c}']['f1'] for c in classes]
+        dev_f1 = [dev_metrics[f'class_{c}']['f1'] for c in classes]
+        
+        # Plot
+        width = 0.35
+        plt.bar(classes, train_f1, width, label='Training', color='#2ecc71')
+        plt.bar([x + width for x in classes], dev_f1, width, label='Development', color='#e74c3c')
+        
+        plt.xlabel('Digit Class')
+        plt.ylabel('F1 Score')
+        plt.title('Per-Class Performance')
+        plt.legend()
+        plt.grid(True, alpha=0.3)
+        
+        plt.savefig('Results/class_metrics.png', dpi=300, bbox_inches='tight')
+        plt.close()
+
+    @staticmethod
+    def analyze_errors(X: np.ndarray, Y: np.ndarray, predictions: np.ndarray) -> None:
+        """Analyze and visualize prediction errors."""
+        errors = (predictions != Y)
+        error_indices = np.where(errors)[0]
+        
+        if len(error_indices) > 0:
+            plt.figure(figsize=(20, 4))
+            for i, idx in enumerate(error_indices[:5]):  # Show first 5 errors
+                plt.subplot(1, 5, i + 1)
+                plt.imshow(X[:, idx].reshape(28, 28), cmap='gray')
+                plt.title(f'True: {Y[idx]}\nPred: {predictions[idx]}')
+                plt.axis('off')
+            
+            plt.savefig('Results/error_analysis.png', dpi=300, bbox_inches='tight')
+            plt.close()
+            
+            # Log error patterns
+            error_pairs = [(Y[i], predictions[i]) for i in error_indices]
+            common_errors = Counter(error_pairs).most_common(5)
+            
+            logging.info("\nMost Common Error Patterns:")
+            for (true, pred), count in common_errors:
+                logging.info(f"True {true} predicted as {pred}: {count} times")
+
+    @staticmethod
+    def save_evaluation_report(train_metrics: dict, dev_metrics: dict, 
+                             test_metrics: Optional[dict] = None) -> None:
+        """Save detailed evaluation report."""
+        report = {
+            'timestamp': datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
+            'training_metrics': train_metrics,
+            'development_metrics': dev_metrics,
+            'test_metrics': test_metrics
+        }
+        
+        with open('Results/evaluation_report.json', 'w') as f:
+            json.dump(report, f, indent=4)
+        
+        # Generate summary plots
+        ModelEvaluator.plot_metric_comparison(train_metrics, dev_metrics, test_metrics)
+
+    @staticmethod
+    def plot_metric_comparison(train_metrics: dict, dev_metrics: dict,
+                             test_metrics: Optional[dict] = None) -> None:
+        """Plot comparison of different metrics across datasets."""
+        metrics = ['precision', 'recall', 'f1']
+        datasets = ['Training', 'Development']
+        if test_metrics:
+            datasets.append('Test')
+        
+        plt.figure(figsize=(15, 5))
+        
+        for i, metric in enumerate(metrics):
+            plt.subplot(1, 3, i + 1)
+            
+            data = []
+            for dataset, d_metrics in zip(datasets, [train_metrics, dev_metrics, test_metrics]):
+                if d_metrics:
+                    values = [d_metrics[f'class_{c}'][metric] for c in range(10)]
+                    data.append(values)
+            
+            plt.boxplot(data, labels=datasets)
+            plt.title(f'{metric.capitalize()} Distribution')
+            plt.grid(True, alpha=0.3)
+        
+        plt.tight_layout()
+        plt.savefig('Results/metric_comparison.png', dpi=300, bbox_inches='tight')
+        plt.close()
+
+    @staticmethod
+    def predict(parameters: dict, X: np.ndarray, batch_size: int = 1000) -> np.ndarray:
+        """
+        Generate predictions in memory-efficient batches.
+        
+        Args:
+            parameters: Model weights and biases
+            X: Input features (784 × m)
+            batch_size: Size of evaluation batches
+            
+        Returns:
+            predictions: Class predictions (m,)
+        """
+        m = X.shape[1]
+        predictions = np.zeros(m, dtype=np.int32)
+        
+        # Process in batches to save memory
+        for i in range(0, m, batch_size):
+            batch_end = min(i + batch_size, m)
+            X_batch = X[:, i:batch_end]
+            
+            # Forward pass without dropout
+            A3, _ = NeuralNetwork.forward_propagation(parameters, X_batch, training=False)
+            predictions[i:batch_end] = np.argmax(A3, axis=0)
+            
+            # Clean up
+            del A3
+            gc.collect()
+            
+            MemoryMonitor.check_memory_usage(config)
+        
+        return predictions
+
+    @staticmethod
+    def calculate_metrics(predictions: np.ndarray, Y: np.ndarray) -> Tuple[float, dict]:
+        """
+        Calculate various performance metrics with memory efficiency.
+        """
+        accuracy = np.mean(predictions == Y) * 100
+        
+        # Calculate per-class metrics
+        classes = np.unique(Y)
+        metrics = {}
+        
+        # Process one class at a time to save memory
+        for c in classes:
+            true_class = (Y == c)
+            pred_class = (predictions == c)
+            
+            # Calculate metrics
+            true_positives = np.sum(true_class & pred_class)
+            false_positives = np.sum(~true_class & pred_class)
+            false_negatives = np.sum(true_class & ~pred_class)
+            
+            precision = true_positives / (true_positives + false_positives) if (true_positives + false_positives) > 0 else 0
+            recall = true_positives / (true_positives + false_negatives) if (true_positives + false_negatives) > 0 else 0
+            f1 = 2 * (precision * recall) / (precision + recall) if (precision + recall) > 0 else 0
+            
+            metrics[f"class_{c}"] = {
+                "precision": precision,
+                "recall": recall,
+                "f1": f1
+            }
+            
+            MemoryMonitor.check_memory_usage(config)
+        
+        return accuracy, metrics
+
+    @staticmethod
+    def plot_training_history(train_costs: list, dev_costs: list, 
+                            train_accuracies: list, dev_accuracies: list) -> None:
+        """
+        Creates a comprehensive training history visualization.
+        """
+        plt.figure(figsize=(20, 10))
+        
+        # Cost progression
+        ax1 = plt.subplot(2, 2, 1)
+        ax1.plot(train_costs, label='Training Cost', color='#3498db', linewidth=2)
+        ax1.plot(dev_costs, label='Dev Cost', color='#e74c3c', linewidth=2)
+        ax1.set_title('Cost Progression', fontsize=12, pad=10)
+        ax1.set_xlabel('Epoch')
+        ax1.set_ylabel('Cost')
+        ax1.legend()
+        ax1.grid(True, alpha=0.3)
+        
+        # Learning rate and gradient norm
+        ax2 = plt.subplot(2, 2, 2)
+        epochs = range(len(train_costs))
+        ax2.semilogy(epochs, train_costs, label='Cost', color='#2ecc71', linewidth=2)
+        ax2.set_title('Learning Dynamics', fontsize=12, pad=10)
+        ax2.set_xlabel('Epoch')
+        ax2.set_ylabel('Log Scale')
+        ax2.legend()
+        ax2.grid(True, alpha=0.3)
+        
+        # Training phases
+        ax3 = plt.subplot(2, 2, 3)
+        phase_colors = ['#e74c3c', '#f1c40f', '#2ecc71']
+        phase_labels = ['Initial', 'Rapid', 'Fine-tuning']
+        
+        for i, (start, end) in enumerate([(0, 5), (5, 20), (20, len(train_accuracies))]):
+            ax3.axvspan(start, end, alpha=0.2, color=phase_colors[i], label=phase_labels[i])
+        
+        ax3.plot(train_accuracies, color='#3498db', linewidth=2)
+        ax3.set_title('Training Phases', fontsize=12, pad=10)
+        ax3.set_xlabel('Epoch')
+        ax3.set_ylabel('Accuracy (%)')
+        ax3.legend()
+        ax3.grid(True, alpha=0.3)
+        
+        # Accuracy progression
+        ax4 = plt.subplot(2, 2, 4)
+        ax4.plot(train_accuracies, label='Training Accuracy', color='#2ecc71', linewidth=2)
+        ax4.plot(dev_accuracies, label='Dev Accuracy', color='#e74c3c', linewidth=2)
+        ax4.axhline(y=90, color='#95a5a6', linestyle='--', label='90% Target')
+        ax4.set_title('Accuracy Progression', fontsize=12, pad=10)
+        ax4.set_xlabel('Epoch')
+        ax4.set_ylabel('Accuracy (%)')
+        ax4.legend()
+        ax4.grid(True, alpha=0.3)
+        
+        plt.tight_layout()
+        plt.savefig('Results/training_analysis.png', dpi=300, bbox_inches='tight')
+        plt.close()
+
+    @staticmethod
+    def visualize_sample_predictions(X: np.ndarray, predictions: np.ndarray, Y: Optional[np.ndarray] = None) -> None:
+        """
+        Enhanced visualization of predictions with confidence scores.
+        """
+        plt.figure(figsize=(12, 4))
+        
+        # Main prediction image
+        plt.subplot(1, 3, 1)
+        plt.gray()
+        plt.imshow(X[:, 0].reshape(28, 28), interpolation='nearest')
+        plt.title(f"True: {Y[0] if Y is not None else 'Unknown'}\nPred: {predictions[0]}")
+        plt.axis('off')
+        
+        # Second prediction image
+        plt.subplot(1, 3, 2)
+        plt.gray()
+        plt.imshow(X[:, 1].reshape(28, 28), interpolation='nearest')
+        plt.title(f"True: {Y[1] if Y is not None else 'Unknown'}\nPred: {predictions[1]}")
+        plt.axis('off')
+        
+        # Third prediction image
+        plt.subplot(1, 3, 3)
+        plt.gray()
+        plt.imshow(X[:, 2].reshape(28, 28), interpolation='nearest')
+        plt.title(f"True: {Y[2] if Y is not None else 'Unknown'}\nPred: {predictions[2]}")
+        plt.axis('off')
+        
+        plt.tight_layout()
+        plt.savefig('Results/sample_predictions.png', dpi=300, bbox_inches='tight')
+        plt.close()
+
+    @staticmethod
+    def plot_confusion_matrix(Y_true: np.ndarray, Y_pred: np.ndarray, dataset: str) -> None:
+        """
+        Plot confusion matrix for model predictions.
+        """
+        classes = np.unique(Y_true)
+        cm = np.zeros((len(classes), len(classes)), dtype=np.int32)
+        
+        # Compute confusion matrix
+        for i in range(len(Y_true)):
+            cm[Y_true[i]][Y_pred[i]] += 1
+        
+        # Plot
+        plt.figure(figsize=(10, 8))
+        plt.imshow(cm, interpolation='nearest', cmap=plt.cm.Blues)
+        plt.title(f'Confusion Matrix ({dataset})')
+        plt.colorbar()
+        
+        # Add labels
+        tick_marks = np.arange(len(classes))
+        plt.xticks(tick_marks, classes)
+        plt.yticks(tick_marks, classes)
+        plt.xlabel('Predicted Label')
+        plt.ylabel('True Label')
+        
+        # Add text annotations
+        thresh = cm.max() / 2
+        for i, j in np.ndindex(cm.shape):
+            plt.text(j, i, format(cm[i, j], 'd'),
+                    horizontalalignment="center",
+                    color="white" if cm[i, j] > thresh else "black")
+        
+        plt.tight_layout()
+        plt.savefig(f'Results/confusion_matrix_{dataset.lower()}.png', dpi=300, bbox_inches='tight')
+        plt.close()
+
+class VisualizationTools:
+    """Advanced visualization tools for model analysis."""
+    
+    @staticmethod
+    def plot_error_distribution(error_analysis: dict) -> None:
+        """
+        Visualizes error distribution and patterns.
+        """
+        plt.figure(figsize=(15, 5))
+        
+        # Confusion pair distribution
+        plt.subplot(1, 3, 1)
+        pairs = [p['pattern'] for p in error_analysis['confusion_pairs']]
+        counts = [p['count'] for p in error_analysis['confusion_pairs']]
+        plt.bar(pairs, counts, color='#3498db')
+        plt.title('Common Confusion Pairs')
+        plt.xticks(rotation=45)
+        plt.ylabel('Count')
+        
+        # Digit difficulty distribution
+        plt.subplot(1, 3, 2)
+        digits = list(error_analysis['digit_difficulties'].keys())
+        accuracies = [info['accuracy'] for info in error_analysis['digit_difficulties'].values()]
+        colors = ['#2ecc71' if acc > 95 else '#f1c40f' if acc > 85 else '#e74c3c' for acc in accuracies]
+        plt.bar(digits, accuracies, color=colors)
+        plt.title('Digit-wise Accuracy')
+        plt.xlabel('Digit')
+        plt.ylabel('Accuracy (%)')
+        
+        # Systematic errors
+        plt.subplot(1, 3, 3)
+        if error_analysis['systematic_errors']:
+            digits = [e['digit'] for e in error_analysis['systematic_errors']]
+            rates = [e['false_positive_rate'] * 100 for e in error_analysis['systematic_errors']]
+            plt.bar(digits, rates, color='#e74c3c')
+            plt.title('Systematic Errors')
+            plt.xlabel('Digit')
+            plt.ylabel('False Positive Rate (%)')
+        else:
+            plt.text(0.5, 0.5, 'No Systematic Errors', ha='center', va='center')
+            plt.title('Systematic Errors')
+        
+        plt.tight_layout()
+        plt.savefig('Results/error_analysis.png', dpi=300, bbox_inches='tight')
+        plt.close()
+
+    @staticmethod
+    def create_interactive_report(analysis_results: dict, error_analysis: dict) -> None:
+        """
+        Creates an interactive HTML report with plotly.
+        Requires plotly package.
+        """
+        try:
+            import plotly.graph_objects as go
+            from plotly.subplots import make_subplots
+            
+            # Create subplots
+            fig = make_subplots(
+                rows=2, cols=2,
+                subplot_titles=('Learning Progression', 'Error Distribution', 
+                              'Digit Difficulties', 'Stability Metrics')
+            )
+            
+            # Add traces
+            # [Additional interactive visualization code would go here]
+            
+            # Save as HTML
+            fig.write_html('Results/interactive_analysis.html')
+            
+        except ImportError:
+            logging.warning("Plotly not installed. Skipping interactive report generation.")
+
+class ResultsAnalyzer:
+    """Analyzes and interprets model evaluation results."""
+    
+    @staticmethod
+    def analyze_training_progression(train_costs: list, dev_costs: list,
+                                  train_accuracies: list, dev_accuracies: list) -> dict:
+        """
+        Analyzes the training progression and identifies key phases.
+        
+        Returns:
+            dict: Analysis results including key metrics and phases
+        """
+        analysis = {
+            'convergence_epoch': 0,
+            'best_epoch': 0,
+            'overfitting_start': None,
+            'learning_phases': [],
+            'stability_metrics': {}
+        }
+        
+        # Find convergence point (when accuracy starts to plateau)
+        for epoch in range(1, len(train_accuracies)):
+            if abs(train_accuracies[epoch] - train_accuracies[epoch-1]) < 0.1:
+                analysis['convergence_epoch'] = epoch
+                break
+        
+        # Identify best performing epoch
+        best_dev_accuracy = max(dev_accuracies)
+        analysis['best_epoch'] = dev_accuracies.index(best_dev_accuracy)
+        
+        # Detect overfitting
+        window_size = 5
+        for epoch in range(window_size, len(dev_accuracies)):
+            window_avg = np.mean(dev_accuracies[epoch-window_size:epoch])
+            if dev_accuracies[epoch] < window_avg - 1.0:  # 1% threshold
+                analysis['overfitting_start'] = epoch
+                break
+        
+        # Identify learning phases
+        analysis['learning_phases'] = [
+            {
+                'name': 'Initial Learning',
+                'epochs': (0, min(5, len(train_accuracies))),
+                'accuracy_gain': train_accuracies[min(5, len(train_accuracies))-1] - train_accuracies[0]
+            },
+            {
+                'name': 'Rapid Learning',
+                'epochs': (5, analysis['convergence_epoch']),
+                'accuracy_gain': train_accuracies[analysis['convergence_epoch']] - train_accuracies[min(5, len(train_accuracies))-1]
+            },
+            {
+                'name': 'Fine Tuning',
+                'epochs': (analysis['convergence_epoch'], len(train_accuracies)),
+                'accuracy_gain': train_accuracies[-1] - train_accuracies[analysis['convergence_epoch']]
+            }
+        ]
+        
+        # Calculate stability metrics
+        analysis['stability_metrics'] = {
+            'train_variance': np.var(train_accuracies[-10:]),
+            'dev_variance': np.var(dev_accuracies[-10:]),
+            'generalization_gap': np.mean(np.array(train_accuracies) - np.array(dev_accuracies))
+        }
+        
+        return analysis
+
+    @staticmethod
+    def analyze_error_patterns(Y_true: np.ndarray, Y_pred: np.ndarray) -> dict:
+        """
+        Analyzes patterns in prediction errors.
+        
+        Returns:
+            dict: Error analysis results
+        """
+        error_analysis = {
+            'confusion_pairs': [],
+            'digit_difficulties': {},
+            'systematic_errors': []
+        }
+        
+        # Find commonly confused pairs
+        errors = Y_true != Y_pred
+        error_indices = np.where(errors)[0]
+        error_pairs = [(Y_true[i], Y_pred[i]) for i in error_indices]
+        common_errors = Counter(error_pairs).most_common(5)
+        
+        error_analysis['confusion_pairs'] = [
+            {
+                'true': true,
+                'predicted': pred,
+                'count': count,
+                'pattern': f"{true}→{pred}"
+            }
+            for (true, pred), count in common_errors
+        ]
+        
+        # Calculate per-digit difficulty
+        for digit in range(10):
+            digit_indices = Y_true == digit
+            if np.sum(digit_indices) > 0:
+                accuracy = np.mean(Y_pred[digit_indices] == digit) * 100
+                error_analysis['digit_difficulties'][digit] = {
+                    'accuracy': accuracy,
+                    'difficulty_level': 'Easy' if accuracy > 95 else 'Medium' if accuracy > 85 else 'Hard'
+                }
+        
+        # Identify systematic errors
+        for digit in range(10):
+            pred_as_digit = Y_pred == digit
+            true_digit = Y_true == digit
+            if np.sum(pred_as_digit) > 0:
+                false_positive_rate = np.sum(pred_as_digit & ~true_digit) / np.sum(pred_as_digit)
+                if false_positive_rate > 0.1:  # 10% threshold
+                    error_analysis['systematic_errors'].append({
+                        'digit': digit,
+                        'false_positive_rate': false_positive_rate,
+                        'commonly_confused_with': list(set(Y_true[pred_as_digit & ~true_digit]))
+                    })
+        
+        return error_analysis
+
+    @staticmethod
+    def generate_performance_report(analysis_results: dict, error_analysis: dict) -> str:
+        """
+        Generates a human-readable performance report.
+        
+        Returns:
+            str: Formatted performance report
+        """
+        report = ["Model Performance Analysis Report", "=" * 40, ""]
+        
+        # Training Progression
+        report.append("1. Training Progression")
+        report.append("-" * 20)
+        report.append(f"Convergence achieved at epoch: {analysis_results['convergence_epoch']}")
+        report.append(f"Best performing epoch: {analysis_results['best_epoch']}")
+        if analysis_results['overfitting_start']:
+            report.append(f"Overfitting detected at epoch: {analysis_results['overfitting_start']}")
+        
+        # Learning Phases
+        report.append("\n2. Learning Phases")
+        report.append("-" * 20)
+        for phase in analysis_results['learning_phases']:
+            report.append(f"\n{phase['name']}:")
+            report.append(f"  Epochs: {phase['epochs']}")
+            report.append(f"  Accuracy Gain: {phase['accuracy_gain']:.2f}%")
+        
+        # Error Analysis
+        report.append("\n3. Error Analysis")
+        report.append("-" * 20)
+        report.append("\nMost Common Confusion Pairs:")
+        for pair in error_analysis['confusion_pairs']:
+            report.append(f"  {pair['pattern']}: {pair['count']} instances")
+        
+        report.append("\nDigit Difficulty Levels:")
+        for digit, info in error_analysis['digit_difficulties'].items():
+            report.append(f"  Digit {digit}: {info['difficulty_level']} ({info['accuracy']:.1f}% accuracy)")
+        
+        # Stability Metrics
+        report.append("\n4. Stability Metrics")
+        report.append("-" * 20)
+        report.append(f"Training variance: {analysis_results['stability_metrics']['train_variance']:.4f}")
+        report.append(f"Development variance: {analysis_results['stability_metrics']['dev_variance']:.4f}")
+        report.append(f"Generalization gap: {analysis_results['stability_metrics']['generalization_gap']:.2f}%")
+        
+        return "\n".join(report)
+
+class MemoryMonitor:
+    """Monitors and manages system memory usage."""
+    
+    @staticmethod
+    def get_memory_usage():
+        """Get current memory usage percentage."""
+        memory = psutil.virtual_memory()
+        if torch.cuda.is_available():
+            gpu_memory = torch.cuda.memory_allocated() / torch.cuda.max_memory_allocated()
+            return max(memory.percent, gpu_memory * 100)
+        return memory.percent
+    
+    @staticmethod
+    def check_memory_usage(config: ModelConfig):
+        """Check if memory usage is within limits."""
+        if config.monitor_memory:
+            current_usage = MemoryMonitor.get_memory_usage()
+            if current_usage > config.max_memory_percent:
+                gc.collect()
+                if MemoryMonitor.get_memory_usage() > config.max_memory_percent:
+                    raise MemoryError(f"Memory usage ({current_usage}%) exceeds limit ({config.max_memory_percent}%)")
+
+def parse_arguments():
+    """Parse command line arguments."""
+    parser = argparse.ArgumentParser(description='Train and evaluate MNIST digit classifier.')
+    
+    parser.add_argument('--continue_training', 
+                       action='store_true',
+                       help='Continue training from saved model')
+    
+    parser.add_argument('--evaluate', 
+                       action='store_true',
+                       help='Only evaluate the model without training')
+    
+    parser.add_argument('--batch_size',
+                       type=int,
+                       default=config.batch_size,
+                       help='Mini-batch size for training')
+    
+    parser.add_argument('--learning_rate',
+                       type=float,
+                       default=config.learning_rate,
+                       help='Initial learning rate')
+    
+    parser.add_argument('--scenario', action='store_true', help='Run different training scenarios')
+    
+    return parser.parse_args()
+
+def train_with_different_scenarios():
+    """
+    Demonstrates different training scenarios with various configurations.
+    """
+    # Load and preprocess data
+    X_train, Y_train, X_dev, Y_dev = DataPreprocessor.load_and_preprocess_data()
+    
+    def run_training_scenario(config: ModelConfig, scenario_name: str):
+        """Helper function to run and log a training scenario."""
+        logging.info(f"\nStarting {scenario_name}")
+        logging.info("=" * 50)
+        logging.info(f"Configuration:\n{config}")
+        
+        try:
+            start_time = time.time()
+            parameters, train_costs, dev_costs = ModelTrainer.train_model(
+                X_train, Y_train, X_dev, Y_dev
+            )
+            duration = time.time() - start_time
+            
+            # Evaluate final performance
+            dev_predictions = ModelEvaluator.predict(parameters, X_dev)
+            final_accuracy = np.mean(dev_predictions == Y_dev) * 100
+            
+            logging.info(f"\nResults for {scenario_name}:")
+            logging.info(f"Training time: {duration:.2f} seconds")
+            logging.info(f"Final accuracy: {final_accuracy:.2f}%")
+            logging.info(f"Memory usage: {MemoryMonitor.get_memory_usage():.1f}%")
+            
+            return parameters, final_accuracy
+            
+        except Exception as e:
+            logging.error(f"Scenario failed: {str(e)}")
+            return None, 0.0
+    
+    # Scenario 1: Fast Training
+    fast_config = ModelConfig(
+        batch_size=512,
+        batch_accumulation=2,
+        iterations=500,
+        warmup_epochs=3,
+        use_augmentation=False,
+        initial_learning_rate=0.002,
+        dropout_rate=0.1
+    )
+    
+    # Scenario 2: Memory Optimized
+    memory_config = ModelConfig(
+        batch_size=64,
+        batch_accumulation=8,
+        max_memory_percent=60.0,
+        gc_frequency=3,
+        initial_hidden_size=96,
+        growth_rate=32
+    )
+    
+    # Scenario 3: High Accuracy
+    accuracy_config = ModelConfig(
+        initial_hidden_size=256,
+        final_hidden_size=1024,
+        growth_rate=128,
+        dropout_rate=0.15,
+        batch_accumulation=6,
+        warmup_epochs=10,
+        iterations=1500
+    )
+    
+    # Scenario 4: Balanced
+    balanced_config = ModelConfig(
+        batch_size=128,
+        batch_accumulation=4,
+        initial_hidden_size=128,
+        final_hidden_size=512,
+        warmup_epochs=5,
+        dropout_rate=0.2
+    )
+    
+    # Run scenarios
+    scenarios = [
+        ("Fast Training", fast_config),
+        ("Memory Optimized", memory_config),
+        ("High Accuracy", accuracy_config),
+        ("Balanced", balanced_config)
+    ]
+    
+    results = {}
+    for name, config in scenarios:
+        parameters, accuracy = run_training_scenario(config, name)
+        results[name] = {
+            'accuracy': accuracy,
+            'parameters': parameters if parameters is not None else None
+        }
+    
+    # Compare results
+    logging.info("\nScenario Comparison:")
+    logging.info("=" * 50)
+    for name, result in results.items():
+        logging.info(f"{name:15s}: {result['accuracy']:.2f}%")
+
+def main():
+    """Main execution function with enhanced error handling and logging."""
+    try:
+        # Parse command line arguments
+        args = parse_arguments()
+        
+        if args.scenario:
+            train_with_different_scenarios()
+            return
+        
+        # Regular training pipeline
+        logging.info("Starting model pipeline...")
+        X_train, Y_train, X_dev, Y_dev = DataPreprocessor.load_and_preprocess_data()
+        X_test, Y_test = DataPreprocessor.load_test_data()
+        
+        if args.evaluate or (args.continue_training and os.path.exists('Data/trained_model.npz')):
+            logging.info("Loading existing model...")
+            parameters = ModelTrainer.load_model_parameters()
+            
+            if args.continue_training:
+                logging.info("Continuing training...")
+                parameters, train_costs, dev_costs = ModelTrainer.train_model(
+                    X_train, Y_train, X_dev, Y_dev, 
+                    initial_parameters=parameters
+                )
+        else:
+            logging.info("Training new model...")
+            parameters, train_costs, dev_costs = ModelTrainer.train_model(
+                X_train, Y_train, X_dev, Y_dev
+            )
+        
+        # Evaluate and visualize results
+        ModelEvaluator.evaluate_and_visualize(
+            parameters, X_train, Y_train, X_dev, Y_dev, X_test, Y_test
+        )
+        
+        logging.info("Model pipeline completed successfully")
+        
+    except Exception as e:
+        logging.error(f"Error in main execution: {str(e)}")
+        raise
+
+if __name__ == "__main__":
+    # Add scenario argument
+    parser = argparse.ArgumentParser(description='Train and evaluate MNIST digit classifier.')
+    parser.add_argument('--scenario', action='store_true', help='Run different training scenarios')
+    args = parser.parse_args()
+    
+    main()

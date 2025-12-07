@@ -1,0 +1,10 @@
+{
+    "default": {
+        "accuracy": 93.91666666666667,
+        "training_time": 100.43466448783875,
+        "memory_usage": 6.939805903199257,
+        "convergence_speed": 2,
+        "final_model_size": 462.0390625,
+        "efficiency_score": 94.96952510578839
+    }
+}
